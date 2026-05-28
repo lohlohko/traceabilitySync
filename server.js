@@ -1,16 +1,37 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const corsOptions = require('./src/config/cors');
 const { testAllConnections } = require('./src/config/database');
 const { startSyncScheduler } = require('./src/schedulers/syncScheduler');
 const syncRoutes = require('./src/routes/sync.routes');
 const log = require('./src/utils/logger');
+const os = require('os');
+
+// Function to get IP
+const getLocalIP = () => {
+  const interfaces = os.networkInterfaces();
+
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      if (
+        iface.family === 'IPv4' &&
+        !iface.internal &&
+        !iface.address.startsWith('172')
+      ) {
+        return iface.address;
+      }
+    }
+  }
+
+  return 'localhost';
+};
 
 const app = express();
-const PORT = process.env.PORT || 3031;
+const PORT = process.env.PORT || 3032;
 
 // Middleware
-app.use(cors());
+app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -19,7 +40,6 @@ app.get('/', (req, res) => {
   res.json({
     message: 'Welcome to SyncDB Service - MySQL to PostgreSQL Sync',
     status: 'running',
-    service: 'One-way data synchronization',
     timestamp: new Date().toISOString()
   });
 });
@@ -30,7 +50,7 @@ app.get('/health', (req, res) => {
     uptime: process.uptime(),
     timestamp: new Date().toISOString()
   });
-});
+});``
 
 // API Routes
 app.use('/api/sync', syncRoutes);
@@ -67,15 +87,16 @@ const startServer = async () => {
     startSyncScheduler();
     
     // Start Express server
-    app.listen(PORT, () => {
-      console.log('\n╔══════════════════════════════════════════╗');
-      console.log('║      SyncDB Service Started              ║');
-      console.log('╚══════════════════════════════════════════╝');
-      console.log(`🚀 Server running on port: ${PORT}`);
-      console.log(`📝 Environment: ${process.env.NODE_ENV || 'development'}`);
-      console.log(`🔗 URL: http://localhost:${PORT}`);
-      console.log(`🔄 Sync interval: ${process.env.SYNC_INTERVAL_MINUTES || 2} minutes`);
-      console.log('╚══════════════════════════════════════════╝\n');
+    app.listen(PORT, '0.0.0.0', async () => {
+      const localIP = getLocalIP();
+      console.log('\n==========================================');
+      console.log('SyncDB Service Started');
+      console.log('==========================================');
+      console.log(`Server Local  : http://localhost:${PORT}`);
+      console.log(`Network URL   : http://${localIP}:${PORT}`);
+      console.log(`Environment   : ${process.env.NODE_ENV || 'development'}`);
+      console.log(`Sync interval : ${process.env.SYNC_INTERVAL_MINUTES || 2} minutes`);
+      console.log('==========================================\n');
     });
     
   } catch (error) {

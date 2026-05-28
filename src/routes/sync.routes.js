@@ -3,6 +3,7 @@ const router = express.Router();
 const { runSyncNow, runInitialSyncNow, getSchedulerStatus } = require('../schedulers/syncScheduler');
 const { getSyncStatuses } = require('../services/syncState.service');
 const { getTraceabilityWorkerNames } = require('../services/traceabilitySync.service');
+const { runHistoricalSync, checkHistoricalCount } = require('../controllers/historicalSync.controller');
 
 /**
  * GET /api/sync/status - Get sync status
@@ -83,5 +84,9 @@ router.post('/initial', async (req, res) => {
     });
   }
 });
+
+router.post('/historical/check', checkHistoricalCount);
+
+router.post('/historical', runHistoricalSync);
 
 module.exports = router;

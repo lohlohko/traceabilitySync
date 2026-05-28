@@ -12,12 +12,17 @@ const cronExpression = `*/${SYNC_INTERVAL_MINUTES} * * * *`;
 
 let syncJob = null;
 let isRunning = false;
+let isPaused = false;
 
 const startSyncScheduler = () => {
   log.info(`🕐 Starting sync scheduler: every ${SYNC_INTERVAL_MINUTES} minutes`);
   log.info(`📅 Cron expression: ${cronExpression}`);
   
   syncJob = cron.schedule(cronExpression, async () => {
+    if (isPaused) {
+      log.info('Sync scheduler is currently PAUSED. Skipping this cycle.');
+      return;
+    }
     if (isRunning) {
       log.warn('Previous sync still running, skipping this cycle');
       return;
@@ -34,6 +39,16 @@ const startSyncScheduler = () => {
   });
   
   log.success('✅ Sync scheduler started successfully');
+};
+
+const pauseSyncScheduler = () => {
+  isPaused = true;
+  log.warn('⏸️ Sync scheduler has been PAUSED');
+};
+
+const resumeSyncScheduler = () => {
+  isPaused = false;
+  log.success('▶️ Sync scheduler has been RESUMED');
 };
 
 const stopSyncScheduler = () => {
@@ -91,6 +106,8 @@ const getSchedulerStatus = () => {
 module.exports = {
   startSyncScheduler,
   stopSyncScheduler,
+  pauseSyncScheduler,
+  resumeSyncScheduler,
   runSyncNow,
   runInitialSyncNow,
   getSchedulerStatus
