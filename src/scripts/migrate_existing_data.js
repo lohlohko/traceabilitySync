@@ -54,7 +54,7 @@ async function runMigration() {
   }
 
   // Step 2: Process in batches
-  console.log('Step 2: Updating assembly, final tester, and fi_datetime columns in batches...');
+  console.log('Step 2: Updating assembly and final tester (ft_datetime from prod_plc_log_fi) in batches...');
   const totalRecords = records.length;
   let processedCount = 0;
   let updatedCount = 0;
@@ -128,11 +128,11 @@ async function runMigration() {
       });
     }
 
-    // 3. Fetch Final Inspection datetime from MySQL prod_plc_log_fi using mcids
+    // 3. Fetch Final Inspection datetime and line from MySQL prod_plc_log_fi using mcids
     let fiRows = [];
     try {
       const [rows] = await mysqlPool.query(
-        'SELECT ppl_mc_id, ppl_datetime FROM prod_plc_log_fi WHERE ppl_mc_id IN (?)',
+        'SELECT ppl_mc_id, ppl_line_area, ppl_datetime FROM prod_plc_log_fi WHERE ppl_mc_id IN (?)',
         [mcids]
       );
       fiRows = rows;
@@ -147,8 +147,11 @@ async function runMigration() {
       const dt = parseDate(row.ppl_datetime);
       if (dt) {
         const existing = fiMap.get(mcid);
-        if (!existing || dt > existing) {
-          fiMap.set(mcid, dt);
+        if (!existing || dt > existing.datetime) {
+          fiMap.set(mcid, {
+            datetime: dt,
+            line: row.ppl_line_area
+          });
         }
       }
     }
@@ -160,25 +163,30 @@ async function runMigration() {
 
     for (const record of chunk) {
       const printRow = assyPrintMap.get(record.mcid);
-      
+      const fiRow = fiMap.get(record.mcid) || null;
+
       // Determine the final correct Lot ID
       const finalLot = printRow ? printRow.as_lot_id : (record.as_lot ? normalizeLotId(record.as_lot) : null);
-      
-      // Final Tester (from prod_assy_lot_print)
-      const ftLine = printRow ? printRow.as_line_area : null;
-      const ftDatetime = printRow ? printRow.as_datetime : null;
 
-      // Assembly (from prod_fg_log using the correct lot ID)
+      // Final Tester (from prod_plc_log_fi ppl_line_area and ppl_datetime)
+      const ftLine = fiRow ? fiRow.line : null;
+      const ftDatetime = fiRow ? fiRow.datetime : null;
+
+      // Assembly (from prod_fg_log, fallback to prod_assy_lot_print)
       const fgRow = finalLot ? fgMap.get(finalLot) : null;
-      const asLine = fgRow ? fgRow.fgs_area : null;
-      const asDatetime = fgRow ? fgRow.fgs_datetime : null;
 
-      // Final Inspection (from prod_plc_log_fi)
-      const fiDatetime = fiMap.get(record.mcid) || null;
+      const asLine = fgRow ? fgRow.fgs_area : (printRow ? printRow.as_line_area : null);
+      const asDatetime = printRow ? printRow.as_datetime : null;
 
-      placeholders.push(`($${paramIndex}, $${paramIndex + 1}, $${paramIndex + 2}, $${paramIndex + 3}::timestamp, $${paramIndex + 4}, $${paramIndex + 5}::timestamp, $${paramIndex + 6}::timestamp)`);
-      values.push(record.mcid, finalLot, ftLine, ftDatetime, asLine, asDatetime, fiDatetime);
-      paramIndex += 7;
+      // LASTMAN datetime (from prod_fg_log fgs_datetime)
+      const fiDatetime = fgRow ? fgRow.fgs_datetime : null;
+
+      // Model (first 5 digits from MCID)
+      const model = record.mcid ? record.mcid.slice(0, 5) : '';
+
+      placeholders.push(`($${paramIndex}, $${paramIndex + 1}, $${paramIndex + 2}, $${paramIndex + 3}::timestamp, $${paramIndex + 4}, $${paramIndex + 5}::timestamp, $${paramIndex + 6}, $${paramIndex + 7}::timestamp)`);
+      values.push(record.mcid, finalLot, ftLine, ftDatetime, asLine, asDatetime, model, fiDatetime);
+      paramIndex += 8;
     }
 
     if (values.length > 0) {
@@ -190,8 +198,9 @@ async function runMigration() {
           ft_datetime = v.ft_datetime,
           as_line = v.as_line,
           as_datetime = v.as_datetime,
+          model = v.model,
           fi_datetime = v.fi_datetime
-        FROM (VALUES ${placeholders.join(', ')}) AS v(mcid, as_lot, ft_line, ft_datetime, as_line, as_datetime, fi_datetime)
+        FROM (VALUES ${placeholders.join(', ')}) AS v(mcid, as_lot, ft_line, ft_datetime, as_line, as_datetime, model, fi_datetime)
         WHERE r.mcid = v.mcid
       `;
 

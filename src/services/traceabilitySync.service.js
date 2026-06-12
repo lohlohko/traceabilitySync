@@ -54,8 +54,8 @@ const TRACEABILITY_TABLES = [
     mysqlTable: 'prod_assy_lot_print',
     mcidColumn: 'as_mc_id',
     columnMap: {
-      ft_line: 'as_line_area',
-      ft_datetime: 'as_datetime',
+      as_line: 'as_line_area',
+      as_datetime: 'as_datetime',
       as_lot: 'as_lot_id'
     }
   },
@@ -63,7 +63,8 @@ const TRACEABILITY_TABLES = [
     mysqlTable: 'prod_plc_log_fi',
     mcidColumn: 'ppl_mc_id',
     columnMap: {
-      fi_datetime: 'ppl_datetime'
+      ft_line: 'ppl_line_area',
+      ft_datetime: 'ppl_datetime'
     }
   },
 ];
@@ -132,8 +133,8 @@ const hasTransactionsConfig = () => {
 
 const buildUpsertQuery = (columnMap, row, mcid) => {
   const targetColumns = Object.keys(columnMap);
-  const columns = ['mcid', ...targetColumns];
-  const values = [mcid];
+  const columns = ['mcid', 'model', ...targetColumns];
+  const values = [mcid, mcid ? mcid.slice(0, 5) : ''];
 
   for (const targetColumn of targetColumns) {
     const sourceColumn = columnMap[targetColumn];
@@ -141,7 +142,7 @@ const buildUpsertQuery = (columnMap, row, mcid) => {
   }
 
   const placeholders = columns.map((_, index) => `$${index + 1}`);
-  const updates = targetColumns.map((column) => `${column} = EXCLUDED.${column}`);
+  const updates = ['model = EXCLUDED.model', ...targetColumns.map((column) => `${column} = EXCLUDED.${column}`)];
 
   const query = `
     INSERT INTO traceability_report (${columns.join(', ')})
@@ -204,7 +205,7 @@ const TRACEABILITY_FG_LOG = {
     as_pn_internal: 'fgs_part_no',
     as_npk: 'fgs_npk_op',
     as_line: 'fgs_area',
-    as_datetime: 'fgs_datetime'
+    fi_datetime: 'fgs_datetime'
   }
 };
 
@@ -486,7 +487,7 @@ const syncTraceability = async () => {
         const rows = await fetchRowsByMcids(tableConfig, mcids);
         const upsertedCount = await upsertRows(client, tableConfig, rows);
         totalUpserts += upsertedCount;
-        
+
         log.info(`[TRACEABILITY] Synced ${upsertedCount} rows from MySQL table: ${tableConfig.mysqlTable}`);
 
         if (tableConfig.mysqlTable === 'prod_assy_lot_print') {
@@ -528,7 +529,7 @@ const syncTraceability = async () => {
           lotIds
         );
         totalUpserts += await upsertRowsByLotId(client, TRACEABILITY_PICK_LOG, pickRows, lotIdToMcid);
-        
+
         const assyTxRowsRaw = await fetchAssyTransactionsByLot(lotIds);
         log.info(`[TRACEABILITY] Fetched ${assyTxRowsRaw.length} AS transaction rows from Postgres .29 for ${lotIds.length} lots.`);
 
@@ -599,9 +600,9 @@ const fetchAnchorBatchHistorical = async (targetDb, startDate, endDate, limit = 
       SELECT as_mc_id AS mcid FROM ${dbPrefix}prod_assy_lot_print WHERE as_datetime BETWEEN ? AND ?
     ) AS combined
   `;
-  
+
   const params = [startDate, endDate, startDate, endDate];
-  
+
   // Resume from cursor: only fetch MCIDs after the last processed one
   if (lastMcid && lastMcid.trim() !== '') {
     baseQuery += ` WHERE mcid > ?`;
@@ -621,12 +622,12 @@ const fetchAnchorBatchHistorical = async (targetDb, startDate, endDate, limit = 
 
 const checkHistoricalDataCount = async (targetDb, startDate, endDate, reset = false) => {
   const dbPrefix = targetDb ? `${targetDb}.` : '';
-  
+
   // Build unique worker name to look up progress state
   const startStr = new Date(startDate).toISOString().split('T')[0].replace(/-/g, '');
   const endStr = new Date(endDate).toISOString().split('T')[0].replace(/-/g, '');
   const workerName = `traceability_historical_${targetDb || 'default'}_${startStr}_${endStr}`;
-  
+
   let lastMcid = null;
   if (!reset) {
     try {
@@ -685,7 +686,7 @@ const syncHistoricalTraceability = async (targetDb, startDate, endDate, limit = 
 
     log.info(`[TRACEABILITY_HISTORICAL] Worker: ${workerName} | Resuming from MCID: ${lastMcid || 'beginning'}`);
     const mcids = await fetchAnchorBatchHistorical(targetDb, startDate, endDate, limit, lastMcid);
-    
+
     if (mcids.length === 0) {
       await writeSyncLog({
         workerName,
@@ -738,7 +739,7 @@ const syncHistoricalTraceability = async (targetDb, startDate, endDate, limit = 
           }
           const upsertedCount = await upsertRows(client, tableConfig, rows);
           totalUpserts += upsertedCount;
-          
+
           if (tableConfig.mysqlTable === 'prod_assy_lot_print') {
             assyRows = rows;
           }
@@ -747,7 +748,7 @@ const syncHistoricalTraceability = async (targetDb, startDate, endDate, limit = 
         const lotIds = Array.from(new Set(assyRows.map((row) => normalizeLotId(row.as_lot_id)).filter(Boolean)));
         if (lotIds.length > 0) {
           const lotIdToMcid = new Map(assyRows.map(row => [normalizeLotId(row.as_lot_id), normalizeMcid(row.as_mc_id)]).filter(([l, m]) => l && m));
-          
+
           const fgTableName = targetDb ? `${targetDb}.${TRACEABILITY_FG_LOG.mysqlTable}` : TRACEABILITY_FG_LOG.mysqlTable;
           const fgRows = await fetchRowsByValues(fgTableName, TRACEABILITY_FG_LOG.lotIdColumn, lotIds);
           totalUpserts += await upsertRowsByLotId(client, TRACEABILITY_FG_LOG, fgRows, lotIdToMcid);
